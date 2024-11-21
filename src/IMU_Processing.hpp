@@ -24,6 +24,7 @@
 /// *************Preconfiguration
 
 #define MAX_INI_COUNT (10)
+#define ISAAC_SIM
 
 const bool time_list(PointType &x, PointType &y) {return (x.curvature < y.curvature);};
 
@@ -61,12 +62,15 @@ class ImuProcess
  private:
   void IMU_init(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, int &N);
   void UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI &pcl_in_out);
+#ifdef ISAAC_SIM
+  void UndistortPcl_isaac(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI &pcl_out);
+#endif 
 
   PointCloudXYZI::Ptr cur_pcl_un_;
   // sensor_msgs::ImuConstPtr last_imu_;
   sensor_msgs::msg::Imu::ConstSharedPtr last_imu_;
   deque<sensor_msgs::msg::Imu::ConstSharedPtr> v_imu_;
-  vector<Pose6D> IMUpose;
+  deque<Pose6D> IMUpose;
   vector<M3D>    v_rot_pcl_;
   M3D Lidar_R_wrt_IMU;
   V3D Lidar_T_wrt_IMU;
@@ -75,6 +79,7 @@ class ImuProcess
   V3D angvel_last;
   V3D acc_s_last;
   double start_timestamp_;
+  double gravity_;
   double last_lidar_end_time_;
   int    init_iter_num = 1;
   bool   b_first_frame_ = true;
@@ -336,6 +341,109 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikf
   }
 }
 
+#ifdef ISAAC_SIM
+#define VEC3D_FROM_MSGS(v) V3D(v.x, v.y, v.z)
+#define MAT3D_FROM_ARRAY(v) (M3D() << MAT_FROM_ARRAY(v)).finished()
+#define VEC3D_FROM_ARRAY(v) V3D(VEC_FROM_ARRAY(v))
+std::ofstream fp_input, fp_output, fp_temp;
+void ImuProcess::UndistortPcl_isaac(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI &pcl_out)
+{
+  /*** In Isaac Sim, IMU and Lidar rate are dividable, also aligned, so
+   * within a MeasureGroup the last IMU timestamp is same as lidar_end_time
+   */
+  auto v_imu = meas.imu;
+  const double &imu_beg_time = rclcpp::Time(v_imu.front()->header.stamp).seconds();
+  const double &imu_end_time = rclcpp::Time(v_imu.back()->header.stamp).seconds();
+  const double &pcl_beg_time = meas.lidar_beg_time;
+  const double &pcl_end_time = meas.lidar_end_time;
+
+  /*** sort point clouds by offset time ***/
+  pcl_out = *(meas.lidar);
+  sort(pcl_out.points.begin(), pcl_out.points.end(), time_list);
+
+  /*** Initialize IMU pose ***/
+  Pose6D last_pose;
+  if (IMUpose.empty())
+  {
+    last_pose = set_pose6d(0.0, Zero3d, Zero3d, Zero3d, Zero3d, Eye3d);
+  }
+  else
+  {
+    last_pose = IMUpose.back();
+  }
+  last_pose.offset_time = 0.0;
+  IMUpose.clear();
+  IMUpose.push_back(last_pose);
+
+  /*** forward propagation at each imu point ***/
+  double dt = rclcpp::Time(v_imu[1]->header.stamp).seconds() - rclcpp::Time(v_imu[0]->header.stamp).seconds();
+  input_ikfom in;
+  state_ikfom imu_state = kf_state.get_x();
+
+  for (auto it_imu = v_imu.begin(); it_imu < v_imu.end(); it_imu++)
+  {
+    auto gyro = VEC3D_FROM_MSGS((*it_imu)->angular_velocity);
+    auto accel = VEC3D_FROM_MSGS((*it_imu)->linear_acceleration);
+    auto accel_world = imu_state.rot * accel;
+    accel_world[2] -= gravity_;
+
+    // simple integration, nothing to do with kf, as simulated IMU has zero noise.
+    imu_state.vel += accel_world * dt;
+    imu_state.pos += imu_state.vel * dt;
+    imu_state.rot = imu_state.rot * Exp(gyro, dt);
+    imu_state.rot.normalize();
+    kf_state.change_x(imu_state);
+
+    /* save the poses at each IMU measurements */
+    auto imu_time = rclcpp::Time((*it_imu)->header.stamp).seconds();
+    double time_offset = imu_time - pcl_beg_time;
+    IMUpose.push_back(set_pose6d(time_offset, accel_world, gyro, imu_state.vel, imu_state.pos, imu_state.rot.toRotationMatrix()));
+  }
+
+  /*** undistort each lidar point (backward propagation) ***/
+  V3D last_position = VEC3D_FROM_ARRAY(IMUpose.back().pos);
+  M3D last_rotation = MAT3D_FROM_ARRAY(IMUpose.back().rot);
+  auto it_pcl = pcl_out.points.end() - 1;
+  for (auto it_kp = IMUpose.end() - 1; it_kp != IMUpose.begin(); it_kp--)
+  {
+    auto head = it_kp - 1;
+    auto tail = it_kp;
+    V3D head_pos = VEC3D_FROM_ARRAY(head->pos);
+    V3D tail_pos = VEC3D_FROM_ARRAY(tail->pos);
+    V3D angvel = VEC3D_FROM_ARRAY(head->gyr);
+    M3D head_rot = MAT3D_FROM_ARRAY(head->rot);
+    M3D tail_rot = MAT3D_FROM_ARRAY(tail->rot);
+    auto duration = tail->offset_time - head->offset_time;
+
+    for (; it_pcl->curvature / double(1000) > head->offset_time; it_pcl--)
+    {
+      dt = it_pcl->curvature / double(1000) - head->offset_time;
+      M3D R_i(head_rot * Exp(angvel, dt));                       // assume constant angular velocity
+      V3D T_i(head_pos + (tail_pos - head_pos) * dt / duration); // assume things move slow enough not to make a difference how we interpolate
+
+      // point in lidar frame
+      V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z);
+      // move to IMU frame
+      P_i = Lidar_R_wrt_IMU * P_i + Lidar_T_wrt_IMU;
+      // to world frame
+      P_i = R_i * P_i + T_i;
+      // to last IMU frame
+      P_i = last_rotation.transpose() * (P_i - last_position);
+      // to last lidar frame
+      P_i = Lidar_R_wrt_IMU.transpose() * (P_i - Lidar_T_wrt_IMU);
+
+      // save Undistorted points and their rotation
+      it_pcl->x = P_i(0);
+      it_pcl->y = P_i(1);
+      it_pcl->z = P_i(2);
+
+      if (it_pcl == pcl_out.points.begin())
+        break;
+    }
+  }
+}
+#endif
+
 void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI::Ptr cur_pcl_un_)
 {
   double t1,t2,t3;
@@ -344,6 +452,7 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
   if(meas.imu.empty()) {return;};
   assert(meas.lidar != nullptr);
 
+#ifndef ISAAC_SIM
   if (imu_need_init_)
   {
     /// The very first lidar frame
@@ -371,6 +480,24 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
   }
 
   UndistortPcl(meas, kf_state, *cur_pcl_un_);
+
+#else 
+  if (imu_need_init_)
+  {
+    imu_need_init_ = false;
+    // last_imu_ = meas.imu.back();
+    gravity_ = meas.imu.front()->linear_acceleration.z;
+    state_ikfom init_state;
+    init_state.rot = Eye3d;
+    init_state.vel = Zero3d;
+    init_state.pos = Zero3d;
+    kf_state.change_x(init_state);
+  }
+
+  UndistortPcl_isaac(meas, kf_state, *cur_pcl_un_);
+#endif
+
+  
 
   t2 = omp_get_wtime();
   t3 = omp_get_wtime();

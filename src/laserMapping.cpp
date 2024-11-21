@@ -384,6 +384,8 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
 
 double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
+
+#ifndef ISAAC_SIM
 bool sync_packages(MeasureGroup &meas)
 {
     if (lidar_buffer.empty() || imu_buffer.empty()) {
@@ -437,6 +439,67 @@ bool sync_packages(MeasureGroup &meas)
     lidar_pushed = false;
     return true;
 }
+#else
+bool sync_packages(MeasureGroup &meas)
+{
+    if (lidar_buffer.empty() || imu_buffer.empty()) 
+    {
+        return false;
+    }
+
+    lidar_end_time = time_buffer[0]; //lidar timestamp is EOF time
+    auto imu_first_time = get_time_sec(imu_buffer.front()->header.stamp);
+    if (imu_first_time > lidar_end_time)
+    {
+        // drop lidar scan until we get IMU readings
+        lidar_buffer.pop_front();
+        time_buffer.pop_front();
+        return false;
+    }
+
+    auto imu_last_time = get_time_sec(imu_buffer.back()->header.stamp);
+    if (imu_last_time < lidar_end_time)
+    {
+        return false;
+    }
+
+    // sync'ed
+    auto scan_time = 1.0/p_pre->SCAN_RATE;
+    meas.lidar = lidar_buffer.front();
+    meas.lidar_end_time = lidar_end_time;
+    meas.lidar_beg_time = lidar_end_time - scan_time;
+    lidar_buffer.pop_front();
+    time_buffer.pop_front();
+ 
+    meas.imu.clear();
+    while (!imu_buffer.empty())
+    {
+        auto current_time = get_time_sec(imu_buffer.front()->header.stamp);
+        if (current_time > lidar_end_time)
+        {
+            break;
+        }
+        else
+        {
+            meas.imu.push_back(imu_buffer.front());
+            imu_buffer.pop_front();
+        }
+    }
+    
+    if (meas.imu.size() != 40)
+    {
+        cerr << "Error:"
+             << " lidar_beg_time:" << meas.lidar_beg_time
+             << " lidar_end_time:" << meas.lidar_end_time
+             << " imu size:" << meas.imu.size()
+             << " imu first time:" << get_time_sec(meas.imu.front()->header.stamp)
+             << " imu last time:" << get_time_sec(meas.imu.back()->header.stamp)
+             << endl;
+    }
+ 
+    return true;
+}
+#endif
 
 int process_increments = 0;
 void map_incremental()
@@ -517,7 +580,6 @@ void publish_frame_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Share
     /**************** save map ****************/
     /* 1. make sure you have enough memories
     /* 2. noted that pcd save will influence the real-time performences **/
-    /*
     if (pcd_save_en)
     {
         int size = feats_undistort->points.size();
@@ -544,7 +606,6 @@ void publish_frame_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Share
             scan_wait_num = 0;
         }
     }
-    */
 }
 
 void publish_frame_body(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFull_body)
@@ -932,7 +993,7 @@ public:
         {
             sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);
         }
-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);
+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, rclcpp::SensorDataQoS().keep_all(), imu_cbk);
         pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 20);
         pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 20);
         pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", 20);
@@ -965,6 +1026,7 @@ private:
     {
         if(sync_packages(Measures))
         {
+#ifndef ISAAC_SIM
             if (flg_first_scan)
             {
                 first_lidar_time = Measures.lidar_beg_time;
@@ -972,6 +1034,7 @@ private:
                 flg_first_scan = false;
                 return;
             }
+#endif
 
             double t0,t1,t2,t3,t4,t5,match_start, solve_start, svd_time;
 
@@ -992,8 +1055,12 @@ private:
                 return;
             }
 
+#ifndef ISAAC_SIM
             flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? \
                             false : true;
+#else
+            flg_EKF_inited = true;
+#endif
             /*** Segment the map in lidar FOV ***/
             lasermap_fov_segment();
 
@@ -1055,7 +1122,7 @@ private:
             /*** iterated state estimation ***/
             double t_update_start = omp_get_wtime();
             double solve_H_time = 0;
-            kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
+            // kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
             state_point = kf.get_x();
             euler_cur = SO3ToEuler(state_point.rot);
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
