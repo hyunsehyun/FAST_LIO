@@ -59,7 +59,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
-#if defined(USE_LIVOX)
+#ifdef USE_LIVOX
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #endif
 #include "preprocess.h"
@@ -310,7 +310,7 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg)
 
 double timediff_lidar_wrt_imu = 0.0;
 bool   timediff_set_flg = false;
-#if defined(USE_LIVOX)
+#ifdef USE_LIVOX
 void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg) 
 {
     mtx_buffer.lock();
@@ -983,7 +983,7 @@ public:
             cout << "~~~~"<<ROOT_DIR<<" doesn't exist" << endl;
 
         /*** ROS subscribe initialization ***/
-#if defined(USE_LIVOX)
+#ifdef USE_LIVOX
         if (p_pre->lidar_type == AVIA)
         {
             sub_pcl_livox_ = this->create_subscription<livox_ros_driver2::msg::CustomMsg>(lid_topic, 20, livox_pcl_cbk);
@@ -1122,7 +1122,9 @@ private:
             /*** iterated state estimation ***/
             double t_update_start = omp_get_wtime();
             double solve_H_time = 0;
-            // kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
+#ifndef ISAAC_SIM
+            kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
+#endif
             state_point = kf.get_x();
             euler_cur = SO3ToEuler(state_point.rot);
             pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
@@ -1210,7 +1212,7 @@ private:
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl_pc_;
-#if defined(USE_LIVOX)
+#ifdef USE_LIVOX
     rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_pcl_livox_;
 #endif
 

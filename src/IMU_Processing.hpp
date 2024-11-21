@@ -24,7 +24,6 @@
 /// *************Preconfiguration
 
 #define MAX_INI_COUNT (10)
-#define ISAAC_SIM
 
 const bool time_list(PointType &x, PointType &y) {return (x.curvature < y.curvature);};
 
@@ -64,7 +63,7 @@ class ImuProcess
   void UndistortPcl(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI &pcl_in_out);
 #ifdef ISAAC_SIM
   void UndistortPcl_isaac(const MeasureGroup &meas, esekfom::esekf<state_ikfom, 12, input_ikfom> &kf_state, PointCloudXYZI &pcl_out);
-#endif 
+#endif
 
   PointCloudXYZI::Ptr cur_pcl_un_;
   // sensor_msgs::ImuConstPtr last_imu_;

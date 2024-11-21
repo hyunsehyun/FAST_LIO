@@ -2,7 +2,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#if defined(USE_LIVOX)
+#ifdef USE_LIVOX
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #endif
 
@@ -114,7 +114,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
     (std::uint32_t, range, range)
 )
 
-#if defined(USE_LIVOX) 
+#ifdef USE_LIVOX 
 namespace livox_ros
 {
 typedef struct {
@@ -143,7 +143,7 @@ class Preprocess
 
   Preprocess();
   ~Preprocess();
-#if defined(USE_LIVOX)
+#ifdef USE_LIVOX
   void process(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg, PointCloudXYZI::Ptr &pcl_out);
 #endif
   void process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, PointCloudXYZI::Ptr &pcl_out);
@@ -160,7 +160,7 @@ class Preprocess
   // ros::Publisher pub_full, pub_surf, pub_corn;
 
 private:
-#if defined(USE_LIVOX)
+#ifdef USE_LIVOX
   void avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg);
   void mid360_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
 #endif
