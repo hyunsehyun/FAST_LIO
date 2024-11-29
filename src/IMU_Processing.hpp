@@ -503,3 +503,34 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
   
   // cout<<"[ IMU Process ]: Time: "<<t3 - t1<<endl;
 }
+
+class CameraProcess {
+public:
+    void set_extrinsic(const Eigen::Vector3d &T, const Eigen::Matrix3d &R) {
+        // Set the translation and rotation from the camera to another sensor frame
+        cam_T = T;
+        cam_R = R;
+    }
+
+    void set_K(const Eigen::Matrix3d &K) {
+        // Set the intrinsic camera matrix
+        cam_K = K;
+    }
+
+    void set_D(const Eigen::VectorXd &D) {
+        // Set the distortion coefficients
+        cam_D = D;
+    }
+
+    void set_time_offset(double offset) {
+        // Set the time offset between the camera and another sensor
+        time_offset = offset;
+    }
+
+private:
+    Eigen::Vector3d cam_T;
+    Eigen::Matrix3d cam_R;
+    Eigen::Matrix3d cam_K;
+    Eigen::VectorXd cam_D;
+    double time_offset;
+};
