@@ -671,8 +671,8 @@ PointCloudXYZI::Ptr pcl_wait_pub(new PointCloudXYZI());
 PointCloudXYZI::Ptr pcl_wait_save(new PointCloudXYZI());
 
 void generateColorMap(sensor_msgs::msg::Image::SharedPtr msg_rgb, 
-                      Eigen::Isometry3d &camera_state, 
-                      Eigen::Isometry3d &lidar_state,
+                      Eigen::Affine3d &camera_state, 
+                      Eigen::Affine3d &lidar_state,
                       pcl::PointCloud<pcl::PointXYZINormal>::Ptr &pc,
                       pcl::PointCloud<pcl::PointXYZRGB>::Ptr &pc_color)
 {
@@ -680,24 +680,58 @@ void generateColorMap(sensor_msgs::msg::Image::SharedPtr msg_rgb,
     Eigen::Quaterniond camera_quat(camera_state.rotation());
     Eigen::Quaterniond lidar_quat(lidar_state.rotation());
 
-    RCLCPP_INFO(
-        rclcpp::get_logger("generateColorMap"),
-        "camera_state: translation=(%f, %f, %f), rotation=(%f, %f, %f, %f)",
-        camera_state.translation()(0), camera_state.translation()(1), camera_state.translation()(2),
-        camera_quat.x(), camera_quat.y(), camera_quat.z(), camera_quat.w()
-    );
+    // RCLCPP_INFO(
+    //     rclcpp::get_logger("generateColorMap"),
+    //     "camera_state: translation=(%f, %f, %f), rotation=(%f, %f, %f, %f)",
+    //     camera_state.translation()(0), camera_state.translation()(1), camera_state.translation()(2),
+    //     camera_quat.x(), camera_quat.y(), camera_quat.z(), camera_quat.w()
+    // );
+
+    // RCLCPP_INFO(
+    //     rclcpp::get_logger("generateColorMap"),
+    //     "lidar_state: translation=(%f, %f, %f), rotation=(%f, %f, %f, %f)",
+    //     lidar_state.translation()(0), lidar_state.translation()(1), lidar_state.translation()(2),
+    //     lidar_quat.x(), lidar_quat.y(), lidar_quat.z(), lidar_quat.w()
+    // );
 
     RCLCPP_INFO(
-        rclcpp::get_logger("generateColorMap"),
-        "lidar_state: translation=(%f, %f, %f), rotation=(%f, %f, %f, %f)",
-        lidar_state.translation()(0), lidar_state.translation()(1), lidar_state.translation()(2),
-        lidar_quat.x(), lidar_quat.y(), lidar_quat.z(), lidar_quat.w()
-    );
+    rclcpp::get_logger("generateColorMap"),
+    "camera_state matrix:\n%f %f %f %f\n%f %f %f %f\n%f %f %f %f\n%f %f %f %f",
+    camera_state(0, 0), camera_state(0, 1), camera_state(0, 2), camera_state(0, 3),
+    camera_state(1, 0), camera_state(1, 1), camera_state(1, 2), camera_state(1, 3),
+    camera_state(2, 0), camera_state(2, 1), camera_state(2, 2), camera_state(2, 3),
+    camera_state(3, 0), camera_state(3, 1), camera_state(3, 2), camera_state(3, 3)
+);
 
+RCLCPP_INFO(
+    rclcpp::get_logger("generateColorMap"),
+    "lidar_state matrix:\n%f %f %f %f\n%f %f %f %f\n%f %f %f %f\n%f %f %f %f",
+    lidar_state(0, 0), lidar_state(0, 1), lidar_state(0, 2), lidar_state(0, 3),
+    lidar_state(1, 0), lidar_state(1, 1), lidar_state(1, 2), lidar_state(1, 3),
+    lidar_state(2, 0), lidar_state(2, 1), lidar_state(2, 2), lidar_state(2, 3),
+    lidar_state(3, 0), lidar_state(3, 1), lidar_state(3, 2), lidar_state(3, 3)
+);
     // Transform from LiDAR to Camera
-    Eigen::Isometry3d T_cl = camera_state.inverse() * lidar_state;
+
+    Eigen::Affine3d camera_inverse = camera_state.inverse();
+    if (!camera_inverse.matrix().allFinite()) {
+        RCLCPP_ERROR(rclcpp::get_logger("generateColorMap"), "camera_state.inverse() contains invalid values.");
+        return;}
+
+
+    Eigen::Affine3d T_cl = camera_state.inverse() * lidar_state;
     Eigen::Matrix3d Rcl = T_cl.rotation();
     Eigen::Vector3d tcl = T_cl.translation();
+
+    RCLCPP_INFO(
+    rclcpp::get_logger("generateColorMap"),
+    "T_cl matrix:\n%f %f %f %f\n%f %f %f %f\n%f %f %f %f\n%f %f %f %f",
+    T_cl(0, 0), T_cl(0, 1), T_cl(0, 2), T_cl(0, 3),
+    T_cl(1, 0), T_cl(1, 1), T_cl(1, 2), T_cl(1, 3),
+    T_cl(2, 0), T_cl(2, 1), T_cl(2, 2), T_cl(2, 3),
+    T_cl(3, 0), T_cl(3, 1), T_cl(3, 2), T_cl(3, 3)
+);
+
 
     // Log T_cl, Rcl, and tcl after computing T_cl
     RCLCPP_INFO(
@@ -1216,6 +1250,11 @@ public:
         this->declare_parameter<int>("pcd_save.interval", -1);
         this->declare_parameter<vector<double>>("mapping.extrinsic_T", vector<double>());
         this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
+        this->declare_parameter<vector<double>>("color_mapping.extrinsic_T", vector<double>());
+        this->declare_parameter<vector<double>>("color_mapping.extrinsic_R", vector<double>());
+        this->declare_parameter<vector<double>>("color_mapping.D_camera", vector<double>());   
+        this->declare_parameter<vector<double>>("color_mapping.K_camera",vector<double>{960.0, 0.0, 960.0, 0.0, 960.0, 600.0, 0.0, 0.0, 1.0});
+        this->declare_parameter<double>("color_mapping.time_offset_lidar_to_camera", 0.0);
 
         this->get_parameter_or<bool>("publish.path_en", path_en, true);
         this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
@@ -1292,8 +1331,8 @@ public:
         Camera_T_wrt_Lidar<<VEC_FROM_ARRAY(extrinT_lc);
         Camera_R_wrt_Lidar<<MAT_FROM_ARRAY(extrinR_lc);
 
-        Eigen::Isometry3d T_IL = Eigen::Isometry3d::Identity();
-        Eigen::Isometry3d T_LC = Eigen::Isometry3d::Identity();
+        // Eigen::Affine3d T_IL = Eigen::Affine3d::Identity();
+        // Eigen::Affine3d T_LC = Eigen::Affine3d::Identity();
         T_IL.translation() = Lidar_T_wrt_IMU;
         T_IL.linear() = Lidar_R_wrt_IMU;
         T_LC.translation() = Camera_T_wrt_Lidar;
@@ -1545,24 +1584,23 @@ private:
                     kf.get_x().rot.w(), kf.get_x().rot.x(), kf.get_x().rot.y(), kf.get_x().rot.z());
 
 
-                Eigen::Isometry3d state_imu_camera_time = Eigen::Isometry3d::Identity();
+                Eigen::Affine3d state_imu_camera_time = Eigen::Affine3d::Identity();
                 state_imu_camera_time.translate(Eigen::Vector3d(cameratime_state.pos));
                 state_imu_camera_time.rotate(Eigen::Quaterniond(cameratime_state.rot));
 
 
                                 // Log T_IL and T_LC
-                RCLCPP_INFO(rclcpp::get_logger("laser_mapping"), "T_IL translation: (%f, %f, %f)", 
-                    T_IL.translation().x(), T_IL.translation().y(), T_IL.translation().z());
+                RCLCPP_INFO(this->get_logger(), "T_IL translation: (%f, %f, %f)", T_IL.translation().x(), T_IL.translation().y(), T_IL.translation().z());
+                RCLCPP_INFO(this->get_logger(), "T_IL rotation: (%f, %f, %f)", T_IL.linear()(0, 0), T_IL.linear()(1, 1), T_IL.linear()(2, 2));
+                RCLCPP_INFO(this->get_logger(), "T_LC translation: (%f, %f, %f)", T_LC.translation().x(), T_LC.translation().y(), T_LC.translation().z());
+                RCLCPP_INFO(this->get_logger(), "T_LC rotation: (%f, %f, %f)", T_LC.linear()(0, 0), T_LC.linear()(1, 1), T_LC.linear()(2, 2));
 
-                RCLCPP_INFO(rclcpp::get_logger("laser_mapping"), "T_LC translation: (%f, %f, %f)", 
-                    T_LC.translation().x(), T_LC.translation().y(), T_LC.translation().z());
 
-
-                Eigen::Isometry3d state_camera = state_imu_camera_time * T_IL * T_LC;
-                Eigen::Isometry3d state_imu = Eigen::Isometry3d::Identity();
+                Eigen::Affine3d state_camera = state_imu_camera_time * T_IL * T_LC;
+                Eigen::Affine3d state_imu = Eigen::Affine3d::Identity();
                 state_imu.translate(Eigen::Vector3d(kf.get_x().pos));
                 state_imu.rotate(Eigen::Quaterniond(kf.get_x().rot));
-                Eigen::Isometry3d state_lidar = state_imu * T_IL;
+                Eigen::Affine3d state_lidar = state_imu * T_IL;
 
                 RCLCPP_INFO(this->get_logger(), "Generating color map...");
                 RCLCPP_INFO(rclcpp::get_logger("laser_mapping"), "feats_undistort size: %lu", feats_undistort->points.size());
@@ -1655,8 +1693,8 @@ private:
     }
 
 private:
-    Eigen::Isometry3d T_IL;
-    Eigen::Isometry3d T_LC;
+    Eigen::Affine3d T_IL;
+    Eigen::Affine3d T_LC;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFull_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFull_body_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudEffect_;
